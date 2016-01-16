@@ -2234,7 +2234,9 @@ make_envp( void )
     if ( cp != (char*) 0 )
 	envp[envn++] = build_env( "SERVER_NAME=%s", cp, &sum );
     envp[envn++] = "GATEWAY_INTERFACE=CGI/1.1";
+    sum += sizeof("GATEWAY_INTERFACE=CGI/1.1");
     envp[envn++] = "SERVER_PROTOCOL=HTTP/1.0";
+    sum += sizeof("SERVER_PROTOCOL=HTTP/1.0");
     (void) snprintf( buf, sizeof(buf), "%d", (int) port );
     envp[envn++] = build_env( "SERVER_PORT=%s", buf, &sum );
     envp[envn++] = build_env(
