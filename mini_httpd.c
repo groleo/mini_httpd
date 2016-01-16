@@ -52,6 +52,8 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <dirent.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "port.h"
 #include "match.h"
@@ -254,12 +256,13 @@ static char* file_details( const char* d, const char* name );
 static void strencode( char* to, size_t tosize, const char* from );
 #endif /* HAVE_SCANDIR */
 static void do_cgi( void );
+static void do_scgi( void );
 static void cgi_interpose_input( int wfd );
 static void post_post_garbage_hack( void );
 static void cgi_interpose_output( int rfd, int parse_headers );
 static char** make_argp( void );
 static char** make_envp( void );
-static char* build_env( char* fmt, char* arg );
+static char* build_env( char* fmt, char* arg, int* sum );
 static void auth_check( char* dirname );
 static void send_authenticate( char* realm );
 static char* virtual_file( char* f );
@@ -1505,7 +1508,14 @@ do_file( void )
     /* Is it CGI? */
     if ( cgi_pattern != (char*) 0 && match( cgi_pattern, file ) )
 	{
-	do_cgi();
+	struct stat st ;
+	if ( stat( file, &st ) < 0 )
+	    return;
+
+	if ( (st.st_mode & S_IFMT) == S_IFSOCK )
+	    do_scgi() ;
+	else
+	    do_cgi() ;
 	return;
 	}
     else if ( pathinfo != (char*) 0 )
@@ -1884,6 +1894,60 @@ do_cgi( void )
     send_error( 500, "Internal Error", "", "Something unexpected went wrong running a CGI program." );
     }
 
+static void
+do_scgi( void )
+{
+    int sock, hdr_len, it;
+    char *buf, **envp, **argp;
+    struct sockaddr_un svc_addr;
+    unsigned i, off=0 ;
+
+    make_log_entry() ;
+
+    if ( method != METHOD_GET && method != METHOD_POST ) {
+	send_error( 501, "Not Implemented", "", "That method is not implemented for SCGI." );
+	return;
+    }
+
+    /* Make the environment vector. */
+    envp = make_envp();
+    argp = make_argp();
+
+    hdr_len = (int)envp[50] ;
+    buf = (char*)e_malloc( (hdr_len+32)*sizeof(char) ) ;
+
+    off+=sprintf( buf+off, "%lu:", hdr_len );
+
+    for ( i=0; envp && envp[i]; ++i )
+    {
+	it=sprintf( buf+off, "%s", envp[i] );
+	char *eq = strchr( buf+off, '=' );
+	if ( eq ) {
+		*eq='\0';
+	}
+	off += it+1;/* 1 is the ending zero */
+    }
+
+    sprintf( buf+off, "," );
+    ++off;
+
+    /* connect to the UNIX socket */
+    snprintf(svc_addr.sun_path, sizeof(svc_addr.sun_path),  "%s/%s", data_dir, file ) ;
+    svc_addr.sun_path[ sizeof(svc_addr.sun_path)-1 ] = 0 ;
+    svc_addr.sun_family = AF_UNIX;
+
+    sock = socket(PF_UNIX, SOCK_STREAM, 0);
+    if (connect(sock, (struct sockaddr *)&svc_addr, sizeof svc_addr) == -1) {
+	syslog( LOG_ERR, "Unable to connect to SCGI socket:%s",svc_addr.sun_path );
+	send_error( 503, "Internal Error", "", "Unable to connect to SCGI socket" );
+	return;
+    }
+    write( sock, buf, off);
+    cgi_interpose_input(sock);
+    cgi_interpose_output(sock,1);
+    close(sock);
+}
+
 
 /* This routine is used only for POST requests.  It reads the data
 ** from the request and sends it to the child process.  The only reason
@@ -2151,15 +2215,16 @@ make_argp( void )
 static char**
 make_envp( void )
     {
-    static char* envp[50];
+    static char* envp[50+1];
     int envn;
+    int sum;
     char* cp;
     char buf[256];
 
-    envn = 0;
-    envp[envn++] = build_env( "PATH=%s", CGI_PATH );
-    envp[envn++] = build_env( "LD_LIBRARY_PATH=%s", CGI_LD_LIBRARY_PATH );
-    envp[envn++] = build_env( "SERVER_SOFTWARE=%s", SERVER_SOFTWARE );
+    sum = envn = 0;
+    envp[envn++] = build_env( "PATH=%s", CGI_PATH, &sum );
+    envp[envn++] = build_env( "LD_LIBRARY_PATH=%s", CGI_LD_LIBRARY_PATH, &sum );
+    envp[envn++] = build_env( "SERVER_SOFTWARE=%s", SERVER_SOFTWARE, &sum );
     if ( vhost && req_hostname != (char*) 0 && req_hostname[0] != '\0' )
 	cp = req_hostname;	/* already computed by virtual_file() */
     else if ( host != (char*) 0 && host[0] != '\0' )
@@ -2167,59 +2232,61 @@ make_envp( void )
     else
 	cp = hostname;
     if ( cp != (char*) 0 )
-	envp[envn++] = build_env( "SERVER_NAME=%s", cp );
+	envp[envn++] = build_env( "SERVER_NAME=%s", cp, &sum );
     envp[envn++] = "GATEWAY_INTERFACE=CGI/1.1";
     envp[envn++] = "SERVER_PROTOCOL=HTTP/1.0";
     (void) snprintf( buf, sizeof(buf), "%d", (int) port );
-    envp[envn++] = build_env( "SERVER_PORT=%s", buf );
+    envp[envn++] = build_env( "SERVER_PORT=%s", buf, &sum );
     envp[envn++] = build_env(
-	"REQUEST_METHOD=%s", get_method_str( method ) );
-    envp[envn++] = build_env( "SCRIPT_NAME=%s", path );
+	"REQUEST_METHOD=%s", get_method_str( method ), &sum );
+    envp[envn++] = build_env( "SCRIPT_NAME=%s", path, &sum );
     if ( pathinfo != (char*) 0 )
 	{
-	envp[envn++] = build_env( "PATH_INFO=/%s", pathinfo );
+	envp[envn++] = build_env( "PATH_INFO=/%s", pathinfo, &sum );
 	(void) snprintf( buf, sizeof(buf), "%s%s", cwd, pathinfo );
-	envp[envn++] = build_env( "PATH_TRANSLATED=%s", buf );
+	envp[envn++] = build_env( "PATH_TRANSLATED=%s", buf, &sum );
 	}
     if ( query[0] != '\0' )
-	envp[envn++] = build_env( "QUERY_STRING=%s", query );
-    envp[envn++] = build_env( "REMOTE_ADDR=%s", ntoa( &client_addr ) );
+	envp[envn++] = build_env( "QUERY_STRING=%s", query, &sum );
+    envp[envn++] = build_env( "REMOTE_ADDR=%s", ntoa( &client_addr ), &sum );
     if ( referrer[0] != '\0' )
 	{
-	envp[envn++] = build_env( "HTTP_REFERER=%s", referrer );
-	envp[envn++] = build_env( "HTTP_REFERRER=%s", referrer );
+	envp[envn++] = build_env( "HTTP_REFERER=%s", referrer, &sum );
+	envp[envn++] = build_env( "HTTP_REFERRER=%s", referrer, &sum );
 	}
     if ( useragent[0] != '\0' )
-	envp[envn++] = build_env( "HTTP_USER_AGENT=%s", useragent );
+	envp[envn++] = build_env( "HTTP_USER_AGENT=%s", useragent, &sum );
     if ( cookie != (char*) 0 )
-	envp[envn++] = build_env( "HTTP_COOKIE=%s", cookie );
+	envp[envn++] = build_env( "HTTP_COOKIE=%s", cookie, &sum );
     if ( host != (char*) 0 )
-	envp[envn++] = build_env( "HTTP_HOST=%s", host );
+	envp[envn++] = build_env( "HTTP_HOST=%s", host, &sum );
     if ( content_type != (char*) 0 )
-	envp[envn++] = build_env( "CONTENT_TYPE=%s", content_type );
+	envp[envn++] = build_env( "CONTENT_TYPE=%s", content_type, &sum );
     if ( content_length != -1 )
 	{
 	(void) snprintf(
 	    buf, sizeof(buf), "%lu", (unsigned long) content_length );
-	envp[envn++] = build_env( "CONTENT_LENGTH=%s", buf );
+	envp[envn++] = build_env( "CONTENT_LENGTH=%s", buf, &sum );
 	}
     if ( remoteuser != (char*) 0 )
-	envp[envn++] = build_env( "REMOTE_USER=%s", remoteuser );
+	envp[envn++] = build_env( "REMOTE_USER=%s", remoteuser, &sum );
     if ( authorization != (char*) 0 )
-	envp[envn++] = build_env( "AUTH_TYPE=%s", "Basic" );
+	envp[envn++] = build_env( "AUTH_TYPE=%s", "Basic", &sum );
     if ( getenv( "TZ" ) != (char*) 0 )
-	envp[envn++] = build_env( "TZ=%s", getenv( "TZ" ) );
+	envp[envn++] = build_env( "TZ=%s", getenv( "TZ" ), &sum );
 
     envp[envn] = (char*) 0;
+    envp[50] = (char*) sum;
     return envp;
     }
 
 
 static char*
-build_env( char* fmt, char* arg )
+build_env( char* fmt, char* arg, int* sum )
     {
     char* cp;
     int size;
+    int osize;
     static char* buf;
     static int maxbuf = 0;
 
@@ -2237,7 +2304,8 @@ build_env( char* fmt, char* arg )
 	    buf = (char*) e_realloc( (void*) buf, maxbuf );
 	    }
 	}
-    (void) snprintf( buf, maxbuf, fmt, arg );
+    osize = snprintf( buf, maxbuf, fmt, arg );
+    if ( sum ) *sum += osize+1;
     cp = e_strdup( buf );
     return cp;
     }
