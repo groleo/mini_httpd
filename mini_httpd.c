@@ -197,6 +197,7 @@ static char* pidfile;
 static char* charset;
 static char* p3p;
 static int max_age;
+static int read_timeout;
 static FILE* logfp;
 static int listen4_fd, listen6_fd;
 static int do_ssl;
@@ -346,6 +347,7 @@ main( int argc, char** argv )
     charset = DEFAULT_CHARSET;
     p3p = (char*) 0;
     max_age = -1;
+    read_timeout = READ_TIMEOUT;
     user = DEFAULT_USER;
     hostname = (char*) 0;
     logfile = (char*) 0;
@@ -443,6 +445,11 @@ main( int argc, char** argv )
 	    {
 	    ++argn;
 	    max_age = atoi( argv[argn] );
+	    }
+	else if ( strcmp( argv[argn], "-R" ) == 0 && argn + 1 < argc )
+	    {
+	    ++argn;
+	    read_timeout = atoi( argv[argn] );
 	    }
 	else
 	    usage();
@@ -871,9 +878,9 @@ static void
 usage( void )
     {
 #ifdef USE_SSL
-    (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-S] [-E certfile] [-Y cipher] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage]\n", argv0 );
+    (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-S] [-E certfile] [-Y cipher] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage] [-R readtimeout]\n", argv0 );
 #else /* USE_SSL */
-    (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage]\n", argv0 );
+    (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage] [-R readtimeout]\n", argv0 );
 #endif /* USE_SSL */
     exit( 1 );
     }
