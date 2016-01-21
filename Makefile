@@ -22,7 +22,7 @@ CRYPT_LIB =    -lcrypt
 
 BINDIR =	/usr/local/sbin
 MANDIR =	/usr/local/man
-CC =		cc
+CC ?=		cc
 CDEFS =		$(SSL_DEFS) $(SSL_INC)
 CFLAGS =	-O $(CDEFS) -ansi -pedantic -U__STRICT_ANSI__ -Wall -Wpointer-arith -Wshadow -Wcast-qual -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wno-long-long
 LDFLAGS =	-s
