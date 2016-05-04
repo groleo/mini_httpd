@@ -14,10 +14,14 @@ CRYPT_LIB =    -lcrypt
 # http://www.openssl.org/  Make sure the SSL_TREE definition points to the
 # tree with your OpenSSL installation - depending on how you installed it,
 # it may be in /usr/local instead of /usr/local/ssl.
-#SSL_TREE =	/usr/local/ssl
+
+
+SSL_TREE ?=	/usr/local/ssl
+SSL_INC =	-I$(SSL_TREE)/include
 #SSL_DEFS =	-DUSE_SSL
-#SSL_INC =	-I$(SSL_TREE)/include
 #SSL_LIBS =	-L$(SSL_TREE)/lib -lssl -lcrypto
+SSL_DEFS =	-DUSE_AXTLS
+SSL_LIBS =	-L$(SSL_TREE)/lib -lcrypt -laxtls
 
 
 BINDIR =	/usr/local/sbin

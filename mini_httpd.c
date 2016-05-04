@@ -75,7 +75,15 @@
 #ifdef USE_SSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#endif /* USE_SSL */
+#elif defined(USE_AXTLS)
+#include <axTLS/ssl.h>
+/* axTLS doesn't have a header for these */
+SSL_CTX * SSL_CTX_new(int meth);
+void SSL_CTX_free(SSL_CTX * ssl_ctx);
+SSL * SSL_new(SSL_CTX *ssl_ctx);
+int SSL_set_fd(SSL *s, int fd);
+int SSL_accept(SSL *ssl);
+#endif
 
 
 #if defined(AF_INET6) && defined(IN6_IS_ADDR_V4MAPPED)
@@ -124,14 +132,14 @@ typedef long long int64_t;
 #ifndef DEFAULT_HTTP_PORT
 #define DEFAULT_HTTP_PORT 80
 #endif /* DEFAULT_HTTP_PORT */
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 #ifndef DEFAULT_HTTPS_PORT
 #define DEFAULT_HTTPS_PORT 443
 #endif /* DEFAULT_HTTPS_PORT */
 #ifndef DEFAULT_CERTFILE
 #define DEFAULT_CERTFILE "mini_httpd.pem"
 #endif /* DEFAULT_CERTFILE */
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 #ifndef DEFAULT_USER
 #define DEFAULT_USER "nobody"
 #endif /* DEFAULT_USER */
@@ -201,20 +209,20 @@ static int read_timeout;
 static FILE* logfp;
 static int listen4_fd, listen6_fd;
 static int do_ssl;
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 static char* certfile;
 static char* cipher;
 static SSL_CTX* ssl_ctx;
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 static char cwd[MAXPATHLEN];
 static int got_hup;
 
 
 /* Request variables. */
 static int conn_fd;
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 static SSL* ssl;
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 static usockaddr client_addr;
 static char* request;
 static size_t request_size, request_len, request_idx;
@@ -354,10 +362,10 @@ main( int argc, char** argv )
     pidfile = (char*) 0;
     logfp = (FILE*) 0;
     do_ssl = 0;
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     certfile = DEFAULT_CERTFILE;
     cipher = (char*) 0;
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     argn = 1;
     while ( argn < argc && argv[argn][0] == '-' )
 	{
@@ -373,7 +381,7 @@ main( int argc, char** argv )
 	    }
 	else if ( strcmp( argv[argn], "-D" ) == 0 )
 	    debug = 1;
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 	else if ( strcmp( argv[argn], "-S" ) == 0 )
 	    do_ssl = 1;
 	else if ( strcmp( argv[argn], "-E" ) == 0 && argn + 1 < argc )
@@ -386,7 +394,7 @@ main( int argc, char** argv )
 	    ++argn;
 	    cipher = argv[argn];
 	    }
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 	else if ( strcmp( argv[argn], "-p" ) == 0 && argn + 1 < argc )
 	    {
 	    ++argn;
@@ -467,14 +475,14 @@ main( int argc, char** argv )
 
     if ( port == 0 )
 	{
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 	if ( do_ssl )
 	    port = DEFAULT_HTTPS_PORT;
 	else
 	    port = DEFAULT_HTTP_PORT;
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
 	port = DEFAULT_HTTP_PORT;
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 	}
 
     /* If we're root and we're going to become another user, get the uid/gid
@@ -582,6 +590,30 @@ main( int argc, char** argv )
 	    }
 	}
 #endif /* USE_SSL */
+#ifdef USE_AXTLS
+    if ( do_ssl )
+	{
+	ssl_ctx = SSL_CTX_new( SSLv23_server_method() );
+	if ( certfile[0] != '\0' )
+	{
+	    if ( SSL_CTX_use_certificate_file( ssl_ctx, certfile, 0 ) == 0 ||
+		 SSL_CTX_use_PrivateKey_file( ssl_ctx, certfile, 0 ) == 0 ||
+		 SSL_CTX_check_private_key( ssl_ctx ) == 0 )
+		{
+		ERR_print_errors_fp( stderr );
+		exit(1);
+		}
+	}
+	if ( cipher != (char*) 0 )
+	    {
+	    if ( SSL_CTX_set_cipher_list( ssl_ctx, cipher ) == 0 )
+		{
+		ERR_print_errors_fp( stderr );
+		exit( 1 );
+		}
+	    }
+	}
+#endif /* USE_AXTLS */
 
     if ( ! debug )
 	{
@@ -877,11 +909,11 @@ main( int argc, char** argv )
 static void
 usage( void )
     {
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-S] [-E certfile] [-Y cipher] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage] [-R readtimeout]\n", argv0 );
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
     (void) fprintf( stderr, "usage:  %s [-C configfile] [-D] [-p port] [-d dir] [-dd data_dir] [-c cgipat] [-u user] [-h hostname] [-r] [-v] [-l logfile] [-i pidfile] [-T charset] [-P P3P] [-M maxage] [-R readtimeout]\n", argv0 );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     exit( 1 );
     }
 
@@ -1019,7 +1051,7 @@ read_config( char* filename )
 		value_required( name, value );
 		max_age = atoi( value );
 		}
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
 	    else if ( strcasecmp( name, "ssl" ) == 0 )
 		{
 		no_value_required( name, value );
@@ -1035,7 +1067,7 @@ read_config( char* filename )
 		value_required( name, value );
 		cipher = e_strdup( value );
 		}
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 	    else
 		{
 		(void) fprintf(
@@ -1198,7 +1230,7 @@ handle_request( void )
 	}
 #endif /* TCP_NOPUSH */
 
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( do_ssl )
 	{
 	ssl = SSL_new( ssl_ctx );
@@ -1209,7 +1241,7 @@ handle_request( void )
 	    exit( 1 );
 	    }
 	}
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 
     /* Read in the request. */
     start_request();
@@ -1395,9 +1427,9 @@ handle_request( void )
 	got_one: ;
 	}
 
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     SSL_free( ssl );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     }
 
 
@@ -1559,14 +1591,14 @@ do_file( void )
 	{
 #ifdef HAVE_SENDFILE
 
-#ifndef USE_SSL
+#if !defined(USE_SSL) && !defined(USE_AXTLS)
 	send_via_sendfile( fd, conn_fd, sb.st_size );
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
 	if ( do_ssl )
 	    send_via_write( fd, sb.st_size );
 	else
 	    send_via_sendfile( fd, conn_fd, sb.st_size );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 
 #else /* HAVE_SENDFILE */
 
@@ -1772,9 +1804,9 @@ do_cgi( void )
     ** interposer process, depending on if we've read some of the data
     ** into our buffer.  We also have to do this for all SSL CGIs.
     */
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( ( method == METHOD_POST && request_len > request_idx ) || do_ssl )
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
     if ( ( method == METHOD_POST && request_len > request_idx ) )
 #endif /* USE_SSL */
 	{
@@ -1814,9 +1846,9 @@ do_cgi( void )
 	parse_headers = 0;
     else
 	parse_headers = 1;
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( parse_headers || do_ssl )
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
     if ( parse_headers )
 #endif /* USE_SSL */
 	{
@@ -2017,13 +2049,13 @@ post_post_garbage_hack( void )
     {
     char buf[2];
 
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( do_ssl )
 	/* We don't need to do this for SSL, since the garbage has
 	** already been read.  Probably.
 	*/
 	return;
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
 
     set_ndelay( conn_fd );
     (void) read( conn_fd, buf, sizeof(buf) );
@@ -2465,9 +2497,9 @@ send_error( int s, char* title, char* extra_header, char* text )
 
     send_response();
 
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     SSL_free( ssl );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     exit( 1 );
     }
 
@@ -2820,28 +2852,28 @@ send_via_sendfile( int fd, int s, off_t size )
 static ssize_t
 my_read( char* buf, size_t size )
     {
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( do_ssl )
 	return SSL_read( ssl, buf, size );
     else
 	return read( conn_fd, buf, size );
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
     return read( conn_fd, buf, size );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     }
 
 
 static ssize_t
 my_write( void* buf, size_t size )
     {
-#ifdef USE_SSL
+#if defined(USE_SSL) || defined(USE_AXTLS)
     if ( do_ssl )
 	return SSL_write( ssl, buf, size );
     else
 	return write( conn_fd, buf, size );
-#else /* USE_SSL */
+#else /* USE_SSL || USE_AXTLS */
     return write( conn_fd, buf, size );
-#endif /* USE_SSL */
+#endif /* USE_SSL || USE_AXTLS */
     }
 
 
