@@ -78,11 +78,15 @@
 #elif defined(USE_AXTLS)
 #include <axTLS/ssl.h>
 /* axTLS doesn't have a header for these */
-SSL_CTX * SSL_CTX_new(int meth);
-void SSL_CTX_free(SSL_CTX * ssl_ctx);
-SSL * SSL_new(SSL_CTX *ssl_ctx);
-int SSL_set_fd(SSL *s, int fd);
-int SSL_accept(SSL *ssl);
+SSL_CTX * SSL_CTX_new(int);
+void SSL_CTX_free(SSL_CTX*);
+
+SSL * SSL_new(SSL_CTX*);
+void SSL_free(SSL*);
+
+int SSL_set_fd(SSL*, int);
+int SSL_accept(SSL*);
+void *SSLv23_server_method(void);
 #endif
 
 
@@ -282,6 +286,7 @@ static void send_error_tail( void );
 static void add_headers( int s, char* title, char* extra_header, char* me, char* mt, off_t b, time_t mod );
 static void start_request( void );
 static void add_to_request( char* str );
+static void add_to_request_sz( char* str, int strsize );
 static char* get_request_line( void );
 static void start_response( void );
 static void add_to_response( char* str );
@@ -294,6 +299,7 @@ static ssize_t my_write( void* buf, size_t size );
 static int my_sendfile( int fd, int s, off_t offset, size_t nbytes );
 #endif /* HAVE_SENDFILE */
 static void add_str( char** bufP, size_t* bufsizeP, size_t* buflenP, char* str );
+static void add_str_sz( char** bufP, size_t* bufsizeP, size_t* buflenP, char* str, int strsize );
 static void make_log_entry( void );
 static void check_referrer( void );
 static int really_check_referrer( void );
@@ -1255,7 +1261,7 @@ handle_request( void )
 	    break;
 	(void) alarm( READ_TIMEOUT );
 	buf[rr] = '\0';
-	add_to_request( buf );
+	add_to_request_sz( buf, rr );
 	if ( strstr( request, "\015\012\015\012" ) != (char*) 0 ||
 	     strstr( request, "\012\012" ) != (char*) 0 )
 	    break;
@@ -1784,7 +1790,8 @@ do_cgi( void )
     ** since at this point the only fd of interest is the connection.
     ** All others will be closed on exec.
     */
-    if ( conn_fd == STDIN_FILENO || conn_fd == STDOUT_FILENO || conn_fd == STDERR_FILENO )
+    if ( conn_fd == STDIN_FILENO || conn_fd == STDOUT_FILENO
+	|| conn_fd == STDERR_FILENO )
 	{
 	int newfd = dup2( conn_fd, STDERR_FILENO + 1 );
 	if ( newfd >= 0 )
@@ -1947,6 +1954,24 @@ do_scgi( void )
 	send_error( 501, "Not Implemented", "", "That method is not implemented for SCGI." );
 	return;
     }
+    
+   /* If the socket happens to be using one of the stdin/stdout/stderr
+    ** descriptors, move it to another descriptor so that the dup2 calls
+    ** below don't screw things up.  We arbitrarily pick fd 3 - if there
+    ** was already something on it, we clobber it, but that doesn't matter
+    ** since at this point the only fd of interest is the connection.
+    ** All others will be closed on exec.
+    */
+    if ( conn_fd == STDIN_FILENO || conn_fd == STDOUT_FILENO
+	|| conn_fd == STDERR_FILENO )
+	{
+	int newfd = dup2( conn_fd, STDERR_FILENO + 1 );
+	if ( newfd >= 0 )
+	    conn_fd = newfd;
+	/* If the dup2 fails, shrug.  We'll just take our chances.
+	** Shouldn't happen though.
+	*/
+	}
 
     /* Make the environment vector. */
     envp = make_envp();
@@ -2690,6 +2715,12 @@ add_to_request( char* str )
     add_str( &request, &request_size, &request_len, str );
     }
 
+static void
+add_to_request_sz( char* str, int strsize )
+    {
+    add_str_sz( &request, &request_size, &request_len, str, strsize );
+    }
+
 static char*
 get_request_line( void )
     {
@@ -2852,14 +2883,16 @@ send_via_sendfile( int fd, int s, off_t size )
 static ssize_t
 my_read( char* buf, size_t size )
     {
+    int rv;
 #if defined(USE_SSL) || defined(USE_AXTLS)
     if ( do_ssl )
-	return SSL_read( ssl, buf, size );
+	rv = SSL_read( ssl, buf, size );
     else
-	return read( conn_fd, buf, size );
+	rv = read( conn_fd, buf, size );
 #else /* USE_SSL || USE_AXTLS */
-    return read( conn_fd, buf, size );
+    rv = read( conn_fd, buf, size );
 #endif /* USE_SSL || USE_AXTLS */
+    return rv;
     }
 
 
@@ -2890,6 +2923,36 @@ my_sendfile( int fd, int s, off_t offset, size_t nbytes )
     }
 #endif /* HAVE_SENDFILE */
 
+static void
+add_str_sz( char** bufP, size_t* bufsizeP, size_t* buflenP, char* str, int strsize )
+    {
+    size_t len;
+
+    if ( str == (char*) 0 )
+	len = 0;
+    else
+	len = strsize;
+
+    if ( *bufsizeP == 0 )
+	{
+	*bufsizeP = len + 500;
+	*buflenP = 0;
+	*bufP = (char*) e_malloc( *bufsizeP );
+	}
+    else if ( *buflenP + len >= *bufsizeP )
+	{
+	*bufsizeP = *buflenP + len + 500;
+	*bufP = (char*) e_realloc( (void*) *bufP, *bufsizeP );
+	}
+
+    if ( len > 0 )
+	{
+	(void) memmove( &((*bufP)[*buflenP]), str, len );
+	*buflenP += len;
+	}
+
+    (*bufP)[*buflenP] = '\0';
+    }
 
 static void
 add_str( char** bufP, size_t* bufsizeP, size_t* buflenP, char* str )
