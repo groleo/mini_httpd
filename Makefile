@@ -28,7 +28,7 @@ BINDIR =	/usr/local/sbin
 MANDIR =	/usr/local/man
 CC ?=		cc
 CDEFS =		$(SSL_DEFS) $(SSL_INC)
-CFLAGS =	-O $(CDEFS) -ansi -pedantic -U__STRICT_ANSI__ -Wall -Wpointer-arith -Wshadow -Wcast-qual -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wno-long-long
+CFLAGS =	-Os -fno-caller-saves -fhonour-copts $(CDEFS) -ansi -pedantic -U__STRICT_ANSI__ -Wall -Wpointer-arith -Wshadow -Wcast-qual -Wcast-align -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wno-long-long
 LDFLAGS =	-s
 LDLIBS =	$(CRYPT_LIB) $(SSL_LIBS) $(SYSV_LIBS)
 
